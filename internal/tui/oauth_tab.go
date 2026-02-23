@@ -13,19 +13,21 @@ import (
 
 // oauthProvider represents an OAuth provider option.
 type oauthProvider struct {
-	name    string
-	apiPath string // management API path
-	emoji   string
+	name       string
+	apiPath    string // management API path
+	emoji      string
+	importMode bool   // true = file import flow (no browser OAuth)
 }
 
 var oauthProviders = []oauthProvider{
-	{"Gemini CLI", "gemini-cli-auth-url", "🟦"},
-	{"Claude (Anthropic)", "anthropic-auth-url", "🟧"},
-	{"Codex (OpenAI)", "codex-auth-url", "🟩"},
-	{"Antigravity", "antigravity-auth-url", "🟪"},
-	{"Qwen", "qwen-auth-url", "🟨"},
-	{"Kimi", "kimi-auth-url", "🟫"},
-	{"IFlow", "iflow-auth-url", "⬜"},
+	{"Gemini CLI", "gemini-cli-auth-url", "🟦", false},
+	{"Claude (Anthropic)", "anthropic-auth-url", "🟧", false},
+	{"Codex (OpenAI)", "codex-auth-url", "🟩", false},
+	{"Antigravity", "antigravity-auth-url", "🟪", false},
+	{"Qwen", "qwen-auth-url", "🟨", false},
+	{"Kimi", "kimi-auth-url", "🟫", false},
+	{"IFlow", "iflow-auth-url", "⬜", false},
+	{"KodaCode", "koda-import", "🟥", true},
 }
 
 // oauthTabModel handles OAuth login flows.
@@ -45,7 +47,9 @@ type oauthTabModel struct {
 	authState     string // OAuth state parameter
 	providerName  string // current provider name
 	callbackInput textinput.Model
-	inputActive   bool // true when user is typing callback URL
+	importInput   textinput.Model // path input for file-import providers
+	importActive  bool            // true when user is typing credentials path
+	inputActive   bool            // true when user is typing callback URL
 }
 
 type oauthState int
@@ -53,7 +57,8 @@ type oauthState int
 const (
 	oauthIdle oauthState = iota
 	oauthPending
-	oauthRemote // remote browser mode: waiting for manual callback
+	oauthRemote    // remote browser mode: waiting for manual callback
+	oauthImport    // file import mode: waiting for credentials path input
 	oauthSuccess
 	oauthError
 )
@@ -81,9 +86,16 @@ func newOAuthTabModel(client *Client) oauthTabModel {
 	ti.Placeholder = "http://localhost:.../auth/callback?code=...&state=..."
 	ti.CharLimit = 2048
 	ti.Prompt = "  回调 URL: "
+
+	ii := textinput.New()
+	ii.Placeholder = "~/.kodacode/credentials.json"
+	ii.CharLimit = 512
+	ii.Prompt = "  Path: "
+
 	return oauthTabModel{
 		client:        client,
 		callbackInput: ti,
+		importInput:   ii,
 	}
 }
 
@@ -144,6 +156,35 @@ func (m oauthTabModel) Update(msg tea.Msg) (oauthTabModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// ---- Import mode: typing credentials path ----
+		if m.importActive {
+			switch msg.String() {
+			case "enter":
+				credPath := m.importInput.Value()
+				if credPath == "" {
+					credPath = "~/.kodacode/credentials.json"
+				}
+				m.importActive = false
+				m.importInput.Blur()
+				m.state = oauthPending
+				m.message = warningStyle.Render(fmt.Sprintf(T("oauth_initiating"), m.providerName))
+				m.viewport.SetContent(m.renderContent())
+				return m, m.startImport(m.providerName, credPath)
+			case "esc":
+				m.importActive = false
+				m.importInput.Blur()
+				m.state = oauthIdle
+				m.message = ""
+				m.viewport.SetContent(m.renderContent())
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.importInput, cmd = m.importInput.Update(msg)
+				m.viewport.SetContent(m.renderContent())
+				return m, cmd
+			}
+		}
+
 		// ---- Input active: typing callback URL ----
 		if m.inputActive {
 			switch msg.String() {
@@ -219,6 +260,17 @@ func (m oauthTabModel) Update(msg tea.Msg) (oauthTabModel, tea.Cmd) {
 		case "enter":
 			if m.cursor >= 0 && m.cursor < len(oauthProviders) {
 				provider := oauthProviders[m.cursor]
+				if provider.importMode {
+					// File import flow: show a text input for credentials path
+					m.state = oauthImport
+					m.providerName = provider.name
+					m.importInput.SetValue("")
+					m.importInput.Focus()
+					m.importActive = true
+					m.message = ""
+					m.viewport.SetContent(m.renderContent())
+					return m, textinput.Blink
+				}
 				m.state = oauthPending
 				m.message = warningStyle.Render(fmt.Sprintf(T("oauth_initiating"), provider.name))
 				m.viewport.SetContent(m.renderContent())
@@ -347,6 +399,7 @@ func (m *oauthTabModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 	m.callbackInput.Width = w - 16
+	m.importInput.Width = w - 16
 	if !m.ready {
 		m.viewport = viewport.New(w, h)
 		m.viewport.SetContent(m.renderContent())
@@ -375,6 +428,12 @@ func (m oauthTabModel) renderContent() string {
 		sb.WriteString("\n\n")
 	}
 
+	// ---- File import mode ----
+	if m.state == oauthImport {
+		sb.WriteString(m.renderImportMode())
+		return sb.String()
+	}
+
 	// ---- Remote browser mode ----
 	if m.state == oauthRemote {
 		sb.WriteString(m.renderRemoteMode())
@@ -397,6 +456,13 @@ func (m oauthTabModel) renderContent() string {
 		}
 
 		label := fmt.Sprintf("%s %s", p.emoji, p.name)
+		// Mark import-mode providers with a tag
+		displayName := p.name
+		if p.importMode {
+			displayName = p.name + " ↑"
+			label = fmt.Sprintf("%s %s", p.emoji, displayName)
+		}
+		_ = displayName
 		if isSelected {
 			label = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(colorPrimary).Padding(0, 1).Render(label)
 		} else {
@@ -408,6 +474,46 @@ func (m oauthTabModel) renderContent() string {
 
 	sb.WriteString("\n")
 	sb.WriteString(helpStyle.Render(T("oauth_help")))
+
+	return sb.String()
+}
+
+// startImport calls the koda-import endpoint to import CLI credentials.
+func (m oauthTabModel) startImport(providerName, credPath string) tea.Cmd {
+	return func() tea.Msg {
+		body := map[string]string{}
+		if credPath != "" && credPath != "~/.kodacode/credentials.json" {
+			body["credentials_path"] = credPath
+		}
+		err := m.client.postJSON("/v0/management/koda-import", body)
+		if err != nil {
+			return oauthPollMsg{done: false, err: fmt.Errorf("koda import failed: %w", err)}
+		}
+		return oauthPollMsg{done: true, message: T("oauth_success")}
+	}
+}
+
+// renderImportMode renders the credentials-path input form for file-import providers.
+func (m oauthTabModel) renderImportMode() string {
+	var sb strings.Builder
+
+	providerStyle := lipgloss.NewStyle().Bold(true).Foreground(colorHighlight)
+	sb.WriteString(providerStyle.Render(fmt.Sprintf("  ↑ %s Import", m.providerName)))
+	sb.WriteString("\n\n")
+
+	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorInfo).Render(T("koda_import_hint")))
+	sb.WriteString("\n\n")
+
+	sb.WriteString(helpStyle.Render(T("koda_import_path_label")))
+	sb.WriteString("\n")
+
+	if m.importActive {
+		sb.WriteString(m.importInput.View())
+		sb.WriteString("\n")
+		sb.WriteString(helpStyle.Render("  " + T("enter_submit") + " • " + T("esc_cancel")))
+	} else {
+		sb.WriteString(helpStyle.Render("  ~/.kodacode/credentials.json"))
+	}
 
 	return sb.String()
 }

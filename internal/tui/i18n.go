@@ -181,6 +181,8 @@ var zhStrings = map[string]string{
 	"oauth_submit_ok":    "✓ 回调已提交，等待处理...",
 	"oauth_submit_fail":  "✗ 提交回调失败",
 	"oauth_waiting":      "  等待认证中...",
+	"koda_import_hint":  "  将读取 KodaCode CLI 的 credentials.json 文件并导入令牌。",
+	"koda_import_path_label": "  credentials.json 路径 (留空使用默认):",
 
 	// ── Usage ──
 	"usage_title":         "📈 使用统计",
@@ -332,6 +334,8 @@ var enStrings = map[string]string{
 	"oauth_submit_ok":    "✓ Callback submitted, waiting...",
 	"oauth_submit_fail":  "✗ Callback submission failed",
 	"oauth_waiting":      "  Waiting for authentication...",
+	"koda_import_hint":      "  Reads credentials.json from the KodaCode CLI and imports the token.",
+	"koda_import_path_label": "  Path to credentials.json (leave blank for default):",
 
 	// ── Usage ──
 	"usage_title":         "📈 Usage Statistics",
