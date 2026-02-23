@@ -38,24 +38,56 @@ func (h *Handler) ImportKodaCredential(c *gin.Context) {
 		return
 	}
 
-	var req kodaImportRequest
-	// Allow body-less requests that rely on default credential path.
-	_ = c.ShouldBindJSON(&req)
+	var credPath string
+	var creds *kodaauth.KodaCredentials
+	var err error
 
-	credPath := strings.TrimSpace(req.CredentialsPath)
-	if credPath == "" {
-		credPath = kodaauth.DefaultCredentialsPath
-	}
+	// 1. Try to read from uploaded file
+	file, err := c.FormFile("file")
+	if err == nil && file != nil {
+		log.Infof("koda-import: parsing uploaded credentials file")
+		openedFile, err := file.Open()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"status": "error",
+				"error":  fmt.Sprintf("failed to open uploaded file: %v", err),
+			})
+			return
+		}
+		defer openedFile.Close()
 
-	log.Infof("koda-import: reading credentials from %s", credPath)
+		creds = &kodaauth.KodaCredentials{}
+		if err := json.NewDecoder(openedFile).Decode(creds); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"status": "error",
+				"error":  fmt.Sprintf("failed to decode uploaded JSON: %v", err),
+			})
+			return
+		}
 
-	creds, err := kodaauth.LoadCredentialsFile(credPath)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"status": "error",
-			"error":  fmt.Sprintf("failed to read credentials: %v", err),
-		})
-		return
+	} else {
+		// 2. Try to read from JSON payload credentials_path, then default
+		var req kodaImportRequest
+		_ = c.ShouldBindJSON(&req)
+		
+		credPath = strings.TrimSpace(req.CredentialsPath)
+		if credPath == "" {
+			credPath = c.PostForm("credentials_path")
+		}
+		credPath = strings.TrimSpace(credPath)
+		if credPath == "" {
+			credPath = kodaauth.DefaultCredentialsPath
+		}
+
+		log.Infof("koda-import: reading credentials from %s", credPath)
+		creds, err = kodaauth.LoadCredentialsFile(credPath)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"status": "error",
+				"error":  fmt.Sprintf("failed to read credentials: %v", err),
+			})
+			return
+		}
 	}
 
 	accessToken := strings.TrimSpace(creds.KodaAuth.AccessToken)
