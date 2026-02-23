@@ -5,7 +5,10 @@ package usage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -348,6 +351,69 @@ func (s *RequestStatistics) MergeSnapshot(snapshot StatisticsSnapshot) MergeResu
 	}
 
 	return result
+}
+	
+const DefaultStatisticsPath = "/data/usage-statistics.json"
+
+// SaveToFile exports the current statistics and writes them to a JSON file.
+func (s *RequestStatistics) SaveToFile(path string) error {
+	if s == nil {
+		return fmt.Errorf("statistics store is nil")
+	}
+	if path == "" {
+		path = DefaultStatisticsPath
+	}
+
+	snapshot := s.Snapshot()
+	data, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal statistics: %w", err)
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	// Write to temporary file first for atomic replacement
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temporary statistics file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename temporary statistics file: %w", err)
+	}
+
+	return nil
+}
+
+// LoadFromFile reads a statistics snapshot from a JSON file and merges it.
+func (s *RequestStatistics) LoadFromFile(path string) error {
+	if s == nil {
+		return fmt.Errorf("statistics store is nil")
+	}
+	if path == "" {
+		path = DefaultStatisticsPath
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // File doesn't exist yet, which is fine
+		}
+		return fmt.Errorf("failed to read statistics file: %w", err)
+	}
+
+	var snapshot StatisticsSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return fmt.Errorf("failed to unmarshal statistics: %w", err)
+	}
+
+	s.MergeSnapshot(snapshot)
+	return nil
 }
 
 func (s *RequestStatistics) recordImported(apiName, modelName string, stats *apiStats, detail RequestDetail) {

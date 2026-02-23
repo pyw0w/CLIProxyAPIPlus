@@ -267,6 +267,31 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 
 	// Setup routes
 	s.setupRoutes()
+	
+	// Load usage statistics from persistence
+	if cfg.UsageStatisticsEnabled {
+		if stats := usage.GetRequestStatistics(); stats != nil {
+			if err := stats.LoadFromFile(""); err != nil {
+				log.Errorf("Failed to load usage statistics: %v", err)
+			} else {
+				log.Info("Usage statistics loaded from persistence")
+			}
+			
+			// Start background persistence goroutine
+			go func() {
+				ticker := time.NewTicker(60 * time.Second)
+				defer ticker.Stop()
+				for range ticker.C {
+					if !usage.StatisticsEnabled() {
+						continue
+					}
+					if err := stats.SaveToFile(""); err != nil {
+						log.Errorf("Failed to save usage statistics: %v", err)
+					}
+				}
+			}()
+		}
+	}
 
 	// Register Amp module using V2 interface with Context
 	s.ampModule = ampmodule.NewLegacy(accessManager, AuthMiddleware(accessManager))
