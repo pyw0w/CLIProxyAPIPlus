@@ -39,7 +39,7 @@ func (h *Handler) ImportKodaCredential(c *gin.Context) {
 	}
 
 	var credPath string
-	var creds *kodaauth.KodaCredentials
+	var creds *kodaauth.KodaCredentialsFile
 	var err error
 
 	// 1. Try to read from uploaded file
@@ -56,7 +56,7 @@ func (h *Handler) ImportKodaCredential(c *gin.Context) {
 		}
 		defer openedFile.Close()
 
-		creds = &kodaauth.KodaCredentials{}
+		creds = &kodaauth.KodaCredentialsFile{}
 		if err := json.NewDecoder(openedFile).Decode(creds); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"status": "error",
@@ -69,7 +69,7 @@ func (h *Handler) ImportKodaCredential(c *gin.Context) {
 		// 2. Try to read from JSON payload credentials_path, then default
 		var req kodaImportRequest
 		_ = c.ShouldBindJSON(&req)
-		
+
 		credPath = strings.TrimSpace(req.CredentialsPath)
 		if credPath == "" {
 			credPath = c.PostForm("credentials_path")
